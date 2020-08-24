@@ -80,14 +80,6 @@ public class RankFeaturesFieldMapper extends FieldMapper {
             setIndexAnalyzer(Lucene.KEYWORD_ANALYZER);
         }
 
-        protected RankFeaturesFieldType(RankFeaturesFieldType ref) {
-            super(ref);
-        }
-
-        public RankFeaturesFieldType clone() {
-            return new RankFeaturesFieldType(this);
-        }
-
         @Override
         public String typeName() {
             return CONTENT_TYPE;
@@ -165,6 +157,19 @@ public class RankFeaturesFieldMapper extends FieldMapper {
     @Override
     protected void parseCreateField(ParseContext context) throws IOException {
         throw new AssertionError("parse is implemented directly");
+    }
+
+    @Override
+    public ValueFetcher valueFetcher(MapperService mapperService, String format) {
+        if (format != null) {
+            throw new IllegalArgumentException("Field [" + name() + "] of type [" + typeName() + "] doesn't support formats.");
+        }
+        return new SourceValueFetcher(name(), mapperService, parsesArrayValue()) {
+            @Override
+            protected Object parseSourceValue(Object value) {
+                return value;
+            }
+        };
     }
 
     @Override

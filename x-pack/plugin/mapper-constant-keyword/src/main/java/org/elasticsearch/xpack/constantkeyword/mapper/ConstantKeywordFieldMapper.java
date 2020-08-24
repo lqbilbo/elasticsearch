@@ -34,8 +34,10 @@ import org.elasticsearch.index.mapper.KeywordFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperParsingException;
+import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.ParseContext;
 import org.elasticsearch.index.mapper.TypeParsers;
+import org.elasticsearch.index.mapper.ValueFetcher;
 import org.elasticsearch.index.query.QueryShardContext;
 import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
 
@@ -102,7 +104,9 @@ public class ConstantKeywordFieldMapper extends FieldMapper {
             if (value != null) {
                 builder.setValue(value.toString());
             }
-            TypeParsers.parseMeta(builder, name, node);
+            if (node.containsKey("meta")) {
+                builder.meta(TypeParsers.parseMeta(name, node.remove("meta")));
+            }
             return builder;
         }
     }
@@ -120,29 +124,6 @@ public class ConstantKeywordFieldMapper extends FieldMapper {
             this(name, value, Collections.emptyMap());
         }
 
-        protected ConstantKeywordFieldType(ConstantKeywordFieldType ref) {
-            super(ref);
-            this.value = ref.value;
-        }
-
-        public ConstantKeywordFieldType clone() {
-            return new ConstantKeywordFieldType(this);
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (super.equals(o) == false) {
-                return false;
-            }
-            ConstantKeywordFieldType other = (ConstantKeywordFieldType) o;
-            return Objects.equals(value, other.value);
-        }
-
-        @Override
-        public int hashCode() {
-            return 31 * super.hashCode() + Objects.hashCode(value);
-        }
-
         /** Return the value that this field wraps. This may be {@code null} if the field is not configured yet. */
         public String value() {
             return value;
@@ -152,15 +133,15 @@ public class ConstantKeywordFieldMapper extends FieldMapper {
         public String typeName() {
             return CONTENT_TYPE;
         }
-        
+
         @Override
         public String familyTypeName() {
             return KeywordFieldMapper.CONTENT_TYPE;
-        }        
+        }
 
         @Override
         public IndexFieldData.Builder fielddataBuilder(String fullyQualifiedIndexName) {
-            return new ConstantIndexFieldData.Builder(mapperService -> value, CoreValuesSourceType.BYTES);
+            return new ConstantIndexFieldData.Builder(mapperService -> value, name(), CoreValuesSourceType.BYTES);
         }
 
         @Override
@@ -281,6 +262,17 @@ public class ConstantKeywordFieldMapper extends FieldMapper {
                     "] only accepts values that are equal to the value defined in the mappings [" + fieldType().value() +
                     "], but got [" + value + "]");
         }
+    }
+
+    @Override
+    public ValueFetcher valueFetcher(MapperService mapperService, String format) {
+        if (format != null) {
+            throw new IllegalArgumentException("Field [" + name() + "] of type [" + typeName() + "] doesn't support formats.");
+        }
+
+        return fieldType().value == null
+            ? lookup -> List.of()
+            : lookup -> List.of(fieldType().value);
     }
 
     @Override

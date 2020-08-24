@@ -426,6 +426,10 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         return this.shardFieldData;
     }
 
+    public boolean isSystem() {
+        return indexSettings.getIndexMetadata().isSystem();
+    }
+
     /**
      * USE THIS METHOD WITH CARE!
      * Returns the primary term the index shard is supposed to be on. In case of primary promotion or when a replica learns about
@@ -884,16 +888,14 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         assert opPrimaryTerm <= getOperationPrimaryTerm()
                 : "op term [ " + opPrimaryTerm + " ] > shard term [" + getOperationPrimaryTerm() + "]";
         ensureWriteAllowed(origin);
-        final Term uid = new Term(IdFieldMapper.NAME, Uid.encodeId(id));
-        final Engine.Delete delete = prepareDelete(id, uid, seqNo, opPrimaryTerm, version,
-            versionType, origin, ifSeqNo, ifPrimaryTerm);
+        final Engine.Delete delete = prepareDelete(id, seqNo, opPrimaryTerm, version, versionType, origin, ifSeqNo, ifPrimaryTerm);
         return delete(engine, delete);
     }
 
-    private Engine.Delete prepareDelete(String id, Term uid, long seqNo, long primaryTerm, long version,
-                                               VersionType versionType, Engine.Operation.Origin origin,
-                                               long ifSeqNo, long ifPrimaryTerm) {
+    public static Engine.Delete prepareDelete(String id, long seqNo, long primaryTerm, long version, VersionType versionType,
+                                              Engine.Operation.Origin origin, long ifSeqNo, long ifPrimaryTerm) {
         long startTime = System.nanoTime();
+        final Term uid = new Term(IdFieldMapper.NAME, Uid.encodeId(id));
         return new Engine.Delete(id, uid, seqNo, primaryTerm, version, versionType,
             origin, startTime, ifSeqNo, ifPrimaryTerm);
     }
@@ -2725,10 +2727,16 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      *                  isn't used
      */
     public void acquirePrimaryOperationPermit(ActionListener<Releasable> onPermitAcquired, String executorOnDelay, Object debugInfo) {
+        acquirePrimaryOperationPermit(onPermitAcquired, executorOnDelay, debugInfo, false);
+    }
+
+    public void acquirePrimaryOperationPermit(ActionListener<Releasable> onPermitAcquired, String executorOnDelay, Object debugInfo,
+                                              boolean forceExecution) {
         verifyNotClosed();
         assert shardRouting.primary() : "acquirePrimaryOperationPermit should only be called on primary shard: " + shardRouting;
 
-        indexShardOperationPermits.acquire(wrapPrimaryOperationPermitListener(onPermitAcquired), executorOnDelay, false, debugInfo);
+        indexShardOperationPermits.acquire(wrapPrimaryOperationPermitListener(onPermitAcquired), executorOnDelay, forceExecution,
+            debugInfo);
     }
 
     /**

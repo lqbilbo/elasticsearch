@@ -36,6 +36,7 @@ import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.xpack.core.ml.inference.TrainedModelConfig;
 import org.elasticsearch.xpack.core.ml.inference.TrainedModelInput;
+import org.elasticsearch.xpack.core.ml.inference.results.InferenceResults;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.ClassificationConfig;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.InferenceStats;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.inference.InferenceDefinition;
@@ -58,6 +59,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import static org.elasticsearch.xpack.ml.MachineLearning.UTILITY_THREAD_POOL_NAME;
@@ -451,6 +453,89 @@ public class ModelLoadingServiceTests extends ESTestCase {
         });
     }
 
+    public void testReferenceCounting() throws Exception {
+        String modelId = "test-reference-counting";
+        withTrainedModel(modelId, 1L);
+
+        ModelLoadingService modelLoadingService = new ModelLoadingService(trainedModelProvider,
+            auditor,
+            threadPool,
+            clusterService,
+            trainedModelStatsService,
+            Settings.EMPTY,
+            "test-node",
+            circuitBreaker);
+
+        modelLoadingService.clusterChanged(ingestChangedEvent(modelId));
+
+        PlainActionFuture<LocalModel> forPipeline = new PlainActionFuture<>();
+        modelLoadingService.getModelForPipeline(modelId, forPipeline);
+        final LocalModel model = forPipeline.get();
+        assertBusy(() -> assertEquals(2, model.getReferenceCount()));
+
+        PlainActionFuture<LocalModel> forSearch = new PlainActionFuture<>();
+        modelLoadingService.getModelForPipeline(modelId, forSearch);
+        forSearch.get();
+        assertBusy(() -> assertEquals(3, model.getReferenceCount()));
+
+        model.release();
+        assertBusy(() -> assertEquals(2, model.getReferenceCount()));
+
+        PlainActionFuture<LocalModel> forSearch2 = new PlainActionFuture<>();
+        modelLoadingService.getModelForPipeline(modelId, forSearch2);
+        forSearch2.get();
+        assertBusy(() -> assertEquals(3, model.getReferenceCount()));
+    }
+
+    public void testReferenceCountingForPipeline() throws Exception {
+        String modelId = "test-reference-counting-for-pipeline";
+        withTrainedModel(modelId, 1L);
+
+        ModelLoadingService modelLoadingService = new ModelLoadingService(trainedModelProvider,
+            auditor,
+            threadPool,
+            clusterService,
+            trainedModelStatsService,
+            Settings.EMPTY,
+            "test-node",
+            circuitBreaker);
+
+        modelLoadingService.clusterChanged(ingestChangedEvent(modelId));
+
+        PlainActionFuture<LocalModel> forPipeline = new PlainActionFuture<>();
+        modelLoadingService.getModelForPipeline(modelId, forPipeline);
+        final LocalModel model = forPipeline.get();
+        assertBusy(() -> assertEquals(2, model.getReferenceCount()));
+
+        PlainActionFuture<LocalModel> forPipeline2 = new PlainActionFuture<>();
+        modelLoadingService.getModelForPipeline(modelId, forPipeline2);
+        forPipeline2.get();
+        assertBusy(() -> assertEquals(3, model.getReferenceCount()));
+
+        // will cause the model to be evicted
+        modelLoadingService.clusterChanged(ingestChangedEvent());
+        assertBusy(() -> assertEquals(2, model.getReferenceCount()));
+    }
+
+    public void testReferenceCounting_ModelIsNotCached() throws ExecutionException, InterruptedException {
+        String modelId = "test-reference-counting-not-cached";
+        withTrainedModel(modelId, 1L);
+
+        ModelLoadingService modelLoadingService = new ModelLoadingService(trainedModelProvider,
+            auditor,
+            threadPool,
+            clusterService,
+            trainedModelStatsService,
+            Settings.EMPTY,
+            "test-node",
+            circuitBreaker);
+
+        PlainActionFuture<LocalModel> future = new PlainActionFuture<>();
+        modelLoadingService.getModelForPipeline(modelId, future);
+        LocalModel model = future.get();
+        assertEquals(1, model.getReferenceCount());
+    }
+
     @SuppressWarnings("unchecked")
     private void withTrainedModel(String modelId, long size) {
         InferenceDefinition definition = mock(InferenceDefinition.class);
@@ -546,7 +631,7 @@ public class ModelLoadingServiceTests extends ESTestCase {
         try(XContentBuilder xContentBuilder = XContentFactory.jsonBuilder().map(Collections.singletonMap("processors",
             Collections.singletonList(
                 Collections.singletonMap(InferenceProcessor.TYPE,
-                    Collections.singletonMap(InferenceProcessor.MODEL_ID,
+                    Collections.singletonMap(InferenceResults.MODEL_ID_RESULTS_FIELD,
                         modelId)))))) {
             return new PipelineConfiguration("pipeline_with_model_" + modelId, BytesReference.bytes(xContentBuilder), XContentType.JSON);
         }
