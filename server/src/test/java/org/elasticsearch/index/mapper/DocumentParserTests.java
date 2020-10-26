@@ -21,25 +21,24 @@ package org.elasticsearch.index.mapper;
 
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.Version;
-import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentType;
-import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.mapper.ParseContext.Document;
+import org.elasticsearch.plugins.Plugin;
 
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
+import static java.util.Collections.singletonList;
 import static org.elasticsearch.test.StreamsUtils.copyToBytesFromClasspath;
 import static org.elasticsearch.test.StreamsUtils.copyToStringFromClasspath;
 import static org.hamcrest.Matchers.containsString;
@@ -49,6 +48,11 @@ import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 
 public class DocumentParserTests extends MapperServiceTestCase {
+
+    @Override
+    protected Collection<? extends Plugin> getPlugins() {
+        return singletonList(new MockMetadataMapperPlugin());
+    }
 
     public void testFieldDisabled() throws Exception {
         DocumentMapper mapper = createDocumentMapper(mapping(b -> {
@@ -339,17 +343,12 @@ public class DocumentParserTests extends MapperServiceTestCase {
 
     // creates an object mapper, which is about 100x harder than it should be....
     ObjectMapper createObjectMapper(MapperService mapperService, String name) {
-        IndexMetadata build = IndexMetadata.builder("")
-            .settings(Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT))
-            .numberOfShards(1).numberOfReplicas(0).build();
-        IndexSettings settings = new IndexSettings(build, Settings.EMPTY);
-        ParseContext context = new ParseContext.InternalParseContext(settings,
-            mapperService.documentMapperParser(), mapperService.documentMapper(), null, null);
+        ParseContext context = new ParseContext.InternalParseContext(mapperService.documentMapper(), null, null, null);
         String[] nameParts = name.split("\\.");
         for (int i = 0; i < nameParts.length - 1; ++i) {
             context.path().add(nameParts[i]);
         }
-        Mapper.Builder<?> builder = new ObjectMapper.Builder<>(nameParts[nameParts.length - 1]).enabled(true);
+        Mapper.Builder builder = new ObjectMapper.Builder(nameParts[nameParts.length - 1]).enabled(true);
         Mapper.BuilderContext builderContext = new Mapper.BuilderContext(context.indexSettings().getSettings(), context.path());
         return (ObjectMapper)builder.build(builderContext);
     }
@@ -931,10 +930,34 @@ public class DocumentParserTests extends MapperServiceTestCase {
         DocumentMapper mapper = createDocumentMapper(mapping(b -> {}));
         MapperParsingException e = expectThrows(MapperParsingException.class, () ->
             mapper.parse(source(b -> b.field("_field_names", 0))));
-        assertTrue(e.getMessage(),
-            e.getMessage().contains("Field [_field_names] is a metadata field and cannot be added inside a document."));
+        assertTrue(e.getCause().getMessage(),
+            e.getCause().getMessage().contains("Field [_field_names] is a metadata field and cannot be added inside a document."));
 
         mapper.parse(source(b -> b.field("foo._field_names", 0))); // parses without error
+    }
+
+    public void testDocumentContainsAllowedMetadataField() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(mapping(b -> {}));
+        {
+            // A metadata field that parses a value fails to parse a null value
+            MapperParsingException e = expectThrows(MapperParsingException.class, () ->
+                mapper.parse(source(b -> b.nullField(MockMetadataMapperPlugin.MockMetadataMapper.CONTENT_TYPE))));
+            assertTrue(e.getMessage(), e.getMessage().contains("failed to parse field [_mock_metadata]"));
+        }
+        {
+            // A metadata field that parses a value fails to parse an object
+            MapperParsingException e = expectThrows(MapperParsingException.class, () ->
+                mapper.parse(source(b -> b.field(MockMetadataMapperPlugin.MockMetadataMapper.CONTENT_TYPE)
+                    .startObject().field("sub-field", "true").endObject())));
+            assertTrue(e.getMessage(), e.getMessage().contains("failed to parse field [_mock_metadata]"));
+        }
+        {
+            ParsedDocument doc = mapper.parse(source(b ->
+                b.field(MockMetadataMapperPlugin.MockMetadataMapper.CONTENT_TYPE, "mock-metadata-field-value")
+            ));
+            IndexableField field = doc.rootDoc().getField(MockMetadataMapperPlugin.MockMetadataMapper.CONTENT_TYPE);
+            assertEquals("mock-metadata-field-value", field.stringValue());
+        }
     }
 
     public void testSimpleMapper() throws Exception {
